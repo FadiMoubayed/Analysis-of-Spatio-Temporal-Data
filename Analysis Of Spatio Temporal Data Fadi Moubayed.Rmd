@@ -1,0 +1,586 @@
+---
+title: "Analysis of Spatio-temporal data final project"
+author: "Fadi Moubayed"
+date: "10/14/2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+### Loading packages
+
+```{r message=FALSE,warning=FALSE}
+# Plotting libraries
+library(rgdal)
+library(raster)
+library(dplyr)
+library(maptools)
+library(leaflet)
+library(ggplot2)
+library(plotly)
+library(scales)
+library(forecast)
+
+# Spatial libraries
+library(sp)
+library(sf)
+library(spatstat)
+
+#Other libraries
+library(lubridate)
+```
+
+
+### Setting the working directory
+Relative paths have been provided for this project. To make this project work on any machiene, please only change the working directory. No fruther work is nedded.
+```{r}
+#Rmd files use the directory they reside in as the base directory. setwd() does not work properly inside chunks
+#Setting the working directory for R markdown
+knitr::opts_knit$set(root.dir = "D:/WWU 1/Analysis-of-spatio-temporal-data" )
+
+```
+
+## Abstract
+Analysing crime incidents is gaining significant importance due to the fact that crime is not only related to safety and stability, but it is also affecting the social, economic and political life of any country.
+In this project crime incidents in the city of Wiltshire in the United Kingdom are analysed both spatially and temporally in the time span between 2016 - 2018. This project explores crime incidents and test the spatial distribution of point pattern. This project indicates that most frequent crime incidents are Anti-social and violence and sexual offend. Additionally, the analysis concludes that the crime incidents do not follow complete spatial randomness which provides the evidence of having clusters and hotspots in the dataset.
+
+## Research question
+This project tries to answer the following questions:
+
+1. Is there any pattern in the way crime incidents are spatially or temporally distributed?
+2. Is the spatial distribution of the crime incidents randomly distributed or does it fall under complete spatial randomness?
+
+
+
+##  Introduction
+Most crime analysis studies analyse crime incidents in a non-spatial manner, i.e. crime incidents are analysed in terms of the number of incidents and the magnitude with no spatial considerations. However, crime incidents also have a spatial dimension which plays a significant role in analysing crime incidents.
+In this project crime incidents in the city of Wiltshire are analysed temporally between the year 2016 and 2018 where summary statistics are preformed to answer questions regarding the temporal distribution of the incidents across the studied time span.
+Additionally, different statistical approaches are used to test whether the spatial distribution of the crime incidents has a spatial pattern, or it falls under complete spatial randomness.
+This project is divided into three main parts. The first part deals with processing the data and getting it ready to be analysed. The second part preforms exploratory analysis and summary statistics The third part preforms the testing for complete spatial randomness.
+
+
+## Assumptions about the data
+The point process X extends throughout 2-D space, but is observed only inside a region W, the "sampling window".
+
+## 1. Data Preparation
+
+Crime incidents data are offered as a series of files located in folders. Each year contains 12 folders each folder representing a month of the year. Inside each folder (month) there are many files containing data about crime incidents in the area of Wiltshire in the United Kingdom.
+To be able to work with the data, we eventually need one data frame containing all information about the crime incidents. As a result, we loop through the folders (months) and combine all the files.
+
+
+### 1.1 Looping through files and folders
+In this part the files in the provided folders are combined into one data frame which contains all the incidents for the year of 2016.
+The folder structure of the crime incidents is that each year has one folder that contains subfolders in which all the year's incidents reside in.
+
+#### 1.1.1 Defining a function that combines all the incidents
+This function will reduce the amount of code that must be written. The function is defined once and called each time the files should be combined.
+
+```{r}
+#The function combineIncidents combines all the incidents from the differnt forlders inside the year's folder that containes the incidents of that year
+combineIncidents = function(incidentsPath){
+  
+  folders = list.dirs(path = incidentsPath, full.names=TRUE,recursive = FALSE)
+  paths=0
+  All = list()
+  
+  for (i in 1:length(folders)) {
+    paths[i]=file.path(folders[i])
+    month=NULL
+    filenames = list.files(paths[i], full.names=TRUE)
+    for(j in length(filenames)){
+      month=rbind(month, read.csv(filenames[[j]],header=F, skip=4))
+    }
+    All = rbind(All,month)
+  }
+  return(All)
+}
+```
+
+#### 1.1.2 Combining the incidents
+
+```{r}
+#calling the function combineIncidents
+allIncidents2016 = combineIncidents("Data/2016")
+allIncidents2017 = combineIncidents("Data/2017")
+allIncidents2018 = combineIncidents("Data/2018")
+
+```
+
+### 1.2 Working on the combined data frame
+In this part the columns of the combined data frame are given proper names. Additionally, both the columns Longitude and Latitude are checked for NA values. The month column is converted into a date object.
+
+### 1.2.1 Working on all incidents
+```{r}
+
+formatIncidents = function (allIncidents) {
+  #Renaming the columns of the final dataframe
+  names(allIncidents) = c("Crime_ID","Date","Reported_by","Falls_within","Longitude","Latitude","Location","LSOA_code","LSOA_name","Crime_type","   Last_outcome category","Context")
+  #Converting the Date column from factor into a date object
+  allIncidents$Date = lubridate::ymd(allIncidents$Date, truncated = 1L)
+  #Adding a column crime count holding a vlaue of 1 for each crime incident
+  allIncidents$Crime.Count = 1
+  #Seperating the year of the incident and the month of the incident into seperate columns
+  allIncidents$Year = year(allIncidents$Date)
+  allIncidents$Month = month(allIncidents$Date)
+  return(allIncidents)
+}
+
+#Having each year's incidents in a formatted way
+formatedIncidents2016 = formatIncidents(allIncidents2016)
+formatedIncidents2017 = formatIncidents(allIncidents2017)
+formatedIncidents2018 = formatIncidents(allIncidents2018)
+
+#Having all incidents of the year 2016, 2017, 2018
+allincidentsFormatted = rbind(formatedIncidents2016,formatedIncidents2017,formatedIncidents2018)
+
+#Checking for NA data in the logitude and latitude columns
+sum(is.na(formatedIncidents2016$Longitude))
+sum(is.na(formatedIncidents2016$Latitude))
+```
+
+
+
+## 2. Exploring data
+In this part of the analysis, the crime incidents are explored with the purpose of gaining a general idea about the crime incidents over the time span of 2016 - 2018.
+The crime incidents are aggregated based on the year and the month columns and a plot is produced. A time series object is created since the seasonplot function offers more flexibility in plotting time series.
+
+```{r}
+#Aggregating crime incidents based on month and year
+monthYear <- aggregate(Crime.Count ~ Month + Year, data = allincidentsFormatted, FUN = sum, na.rm = TRUE)
+#creating a time series object
+allIncidentsTimeSeries = ts(monthYear, start = c(2016, 01) , frequency = 12)
+#plotting reults
+seasonplot(allIncidentsTimeSeries[,3],s = 12,col=rainbow(16), year.labels=TRUE,main = "Crime incidents by month")
+```
+
+The plot shows crime incidents for the years 2016, 2017, 2018. In general, there is a trend in the number of crime in these 3 years. The incidents number starts in January around 4500 incidents for the years 2017 and 2018 (with the lowest number in 2016) and then it plummets for all years in February. After that, the number of incidents starts increasing until it reaches a peak in July for all 3 years and goes back to plummeting again.
+
+Since the focus of this project will be on the drug and the burglary, the following plot provides an overview of how those incidents are distributed. One can also notice how crime incidents are all approximated to specific points as many incidents share the same location. The purpose of this plot is to visualize incidents distribution and the process of anonymization which is done by the British police.
+
+```{r}
+#Subsetting the dataframe to only get the drugs and burgerly incidents
+incidentsDrugsBurgerly = subset(allincidentsFormatted , allincidentsFormatted$Crime_type == "Drugs" | allincidentsFormatted$Crime_type == "Burglary")
+#reading the shapefile
+Wiltshire = readOGR(dsn = "ShapeFiles/Wiltshire.shp")
+### visualising drug  and burgerly incidents
+incidentsDrugsBurgerly$popup = paste("<b>Crime ID #: </b>", incidentsDrugsBurgerly$Crime_ID,
+                                     "<b>Incident date #: </b>", incidentsDrugsBurgerly$Month,
+                                     "<b>Incident Year #: </b>", incidentsDrugsBurgerly$Year,
+                                     "<b>Reported by: </b>", incidentsDrugsBurgerly$Reported_by,
+                                     "<b>Falls within: </b>", incidentsDrugsBurgerly$Falls_within,
+                                     "<b>Longitude: </b>", incidentsDrugsBurgerly$Longitude,
+                                     "<b>Latitude: </b>",incidentsDrugsBurgerly$Latitude,
+                                     "<b>Location: </b>",incidentsDrugsBurgerly$Location,
+                                     "<b>Crime type: </b>", incidentsDrugsBurgerly$Crime_type
+                                     )
+
+leaflet(incidentsDrugsBurgerly,width = "100%") %>% addTiles() %>%
+  addTiles(group = "OSM (default)") %>%
+  # addProviderTiles(provider = "NASAGIBS.ViirsEarthAtNight2012",group = "Nighttime Imagery") %>%
+  addMarkers(lng = ~Longitude, lat = ~Latitude, popup = incidentsDrugsBurgerly$popup, clusterOptions = markerClusterOptions())%>%addPolygons(data = Wiltshire)
+```
+
+### 3. Analysing incidents of individual years
+
+### 3.1 The year 2016
+
+### 3.1.1 Summary statistics
+Following is an overview of each type of crime with the number of incidents in 2016:
+
+```{r}
+#Getting the number of incidents for each crime type
+table(formatedIncidents2016$Crime_type)
+```
+
+
+
+The following graph provides an overview of how each type of incidents changes over time for the year 2016. Some incidents such as criminal damage and other theft have a slight change over time. Other incidents such as robbery, shoplifting and drugs change significantly over time. Other incidents such as public order change moderately over time. The logarithmic scale was used for the y axis for better visualization.
+
+```{r}
+#aggregating incidents based on type and date
+aggCrime <- aggregate(Crime.Count ~ Crime_type + Date, data = formatedIncidents2016, FUN = sum, na.rm = TRUE)
+#generating plot
+qplot(data = aggCrime, x = Date, y = Crime.Count, color = Crime_type, geom = "line",
+ ylab = "Crime Count\n", xlab = "\nDate", size = I(.7)) + 
+geom_point(size = I(2.5), shape = 17) + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), 
+labels = trans_format("log10", math_format(10^.x))) + scale_x_date(labels = date_format("%m/%y"), 
+breaks = date_breaks(width = "2 month"))
+```
+
+The following graph plots incidents' types against the number of incidents:
+```{r}
+qplot(formatedIncidents2016$Crime_type, xlab = "Crime") + scale_x_discrete(labels = abbreviate)
+```
+
+looking at the histogram, one can notice the number of crime incidents of each type varies significantly. The highest number of crimes being Anti-social.
+
+### 3.2 The year 2017
+
+### 3.2.1 Summary statistics
+```{r}
+#Getting the number of incidents for each crime type
+table(formatedIncidents2017$Crime_type)
+```
+Similar to the plot in 2016, the following plot shows how each crime type changes over time. There are some differences in some incidents to 2016. Rubbery unlike 2016 increases in the first half of 2017. It plummets in August and then goes up again October to plummet again in December. Furthermore, it shows relatively less fluctuations than in 2016. Other incidents show relatively similar change to 2016.
+```{r}
+aggCrime <- aggregate(Crime.Count ~ Crime_type + Date, data = formatedIncidents2017, FUN = sum, na.rm = TRUE)
+qplot(data = aggCrime, x = Date, y = Crime.Count, color = Crime_type, geom = "line",
+ ylab = "Crime Count\n", xlab = "\nDate", size = I(.7)) + 
+geom_point(size = I(2.5), shape = 17) + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), 
+labels = trans_format("log10", math_format(10^.x))) + scale_x_date(labels = date_format("%m/%y"), 
+breaks = date_breaks(width = "2 month"))
+```
+
+The following graph plots incidents' types against the number of incidents:
+
+```{r}
+# Does it a bit better
+qplot(formatedIncidents2017$Crime_type, xlab = "Crime") + scale_x_discrete(labels = abbreviate)
+
+```
+
+The graph shows results similar to the incidents of 2016 with the anti-social incidents being the highest.
+
+
+### 3.3 The year 2018
+### 3.3.1 Summary statistics
+```{r}
+#Getting the number of incidents for each crime type
+table(formatedIncidents2018$Crime_type)
+```
+The following graph shows some difference to 2016 and 2017 in some incidents. The incidents bicycle theft, other crime and drugs show significant fluctuation over time compared to the years 2016 and 2017. Rubbery and Theft from the person also show different fluctuation in the year 2018.
+```{r}
+aggCrime <- aggregate(Crime.Count ~ Crime_type + Date, data = formatedIncidents2018, FUN = sum, na.rm = TRUE)
+qplot(data = aggCrime, x = Date, y = Crime.Count, color = Crime_type, geom = "line",
+ ylab = "Crime Count\n", xlab = "\nDate", size = I(.7)) + 
+geom_point(size = I(2.5), shape = 17) + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), 
+labels = trans_format("log10", math_format(10^.x))) + scale_x_date(labels = date_format("%m/%y"), 
+breaks = date_breaks(width = "2 month"))
+```
+
+The following graph plots incidents' types against the number of incidents:
+```{r}
+# Does it a bit better
+qplot(formatedIncidents2017$Crime_type, xlab = "Crime") + scale_x_discrete(labels = abbreviate)
+```
+
+The graph shows results similar to the incidents of 2016 and 2017 with the anti-social incidents being the highest. There is an increase in the sexual incidents
+
+Looking at the graphs of how the incidents change over time, one can conclude that some incidents have a minor change over time and a similar change over the studied years while other incidents vary significantly both within one year or within the 3 studied years.
+
+## 4. Preparing data for point pattern analysis
+
+### 4.1 Getting drugs and burgerly incidents for each year
+```{r}
+#getting drugs and burgerly incidents for each year
+incidentsDrugsBurgerly2016 = subset(incidentsDrugsBurgerly , incidentsDrugsBurgerly$Year=="2016")
+incidentsDrugsBurgerly2017 = subset(incidentsDrugsBurgerly , incidentsDrugsBurgerly$Year=="2017")
+incidentsDrugsBurgerly2018 = subset(incidentsDrugsBurgerly , incidentsDrugsBurgerly$Year=="2018")
+```
+
+### 4.2 Projecting the incidents
+In this part the drug and the burgerly incidents are projected into a metric projection system. As a result, the projection system EPSG:27700 which is suitable for the area of great Britan is chosen.
+```{r}
+#Projecting from WGS1984 to the British national grid
+
+#All incidents
+allIncidentsDrugsBurgerlyProjected = SpatialPointsDataFrame(incidentsDrugsBurgerly[,5:6], incidentsDrugsBurgerly, proj4string = CRS("+init=epsg:4326"))
+allIncidentsDrugsBurgerlyProjected= spTransform(allIncidentsDrugsBurgerlyProjected, CRS("+init=epsg:27700"))
+
+#2016
+incidentsDrugsBurgerlyProjected2016 = SpatialPointsDataFrame(incidentsDrugsBurgerly2016[,5:6], incidentsDrugsBurgerly2016, proj4string = CRS("+init=epsg:4326"))
+incidentsDrugsBurgerlyProjected2016= spTransform(incidentsDrugsBurgerlyProjected2016, CRS("+init=epsg:27700"))
+
+#2017
+incidentsDrugsBurgerlyProjected2017 = SpatialPointsDataFrame(incidentsDrugsBurgerly2017[,5:6], incidentsDrugsBurgerly2017, proj4string = CRS("+init=epsg:4326"))
+incidentsDrugsBurgerlyProjected2017= spTransform(incidentsDrugsBurgerlyProjected2017, CRS("+init=epsg:27700"))
+
+#2018
+incidentsDrugsBurgerlyProjected2018 = SpatialPointsDataFrame(incidentsDrugsBurgerly2018[,5:6], incidentsDrugsBurgerly2018, proj4string = CRS("+init=epsg:4326"))
+incidentsDrugsBurgerlyProjected2018= spTransform(incidentsDrugsBurgerlyProjected2018, CRS("+init=epsg:27700"))
+
+#Checking the projection system
+crs(allIncidentsDrugsBurgerlyProjected)
+crs(incidentsDrugsBurgerlyProjected2016)
+crs(incidentsDrugsBurgerlyProjected2017)
+crs(incidentsDrugsBurgerlyProjected2018)
+```
+
+
+
+### 4.3 Checking for duplicated coordinates
+Data provided by the British police is anonymized. The latitude and longitude locations of Crime incidents represent the approximate location of a crime - not the exact place that it happened.
+
+A master list of anonymous map points is maintained. Each map point is specifically chosen so that it:
+
+Appears over the centre point of a street, above a public place such as a Park or Airport, or above a commercial premise like a Shopping Centre or Nightclub.
+Has a catchment area which contains at least eight postal addresses or no postal addresses at all.
+When crime data is uploaded by police forces, the exact location of each crime is compared against this master list to find the nearest map point. The co-ordinates of the actual crime are then replaced with the co-ordinates of the map point.
+
+source(https://data.police.uk/about/#location-anonymisation)
+
+As a result the provided crime incidents have points whose coordinates are the same. The function zerodist which returns duplicated coordinates is used to detect how many duplicated points the data frame has.  
+
+In this section incidents of interest are checked for duplicate coordinates. It is important for the point pattern analysis not to have duplicate coordinates. Since the data was anonymised by the British police, the dataset has duplicate coordinates. If the duplicate points are to be excluded that means 8963 incidents are lost during the process. As a result another approach using the jitter function is used instead.
+
+```{r}
+# Checking duplicate coordinates
+#checking for points with the same coordinates
+zeroDistance = zerodist(allIncidentsDrugsBurgerlyProjected)
+length(allIncidentsDrugsBurgerlyProjected)
+length(remove.duplicates(allIncidentsDrugsBurgerlyProjected))
+```
+###  4.4 Working on the shapefile of the area of Wiltshire
+
+In this part the shapefile of the area of Wiltshire is projected to EPSG:27700 which is the same projection system the incidents were projected to.
+```{r}
+#Projecting the shapefile into EPSG:27700
+Wiltshire_Projected = spTransform(Wiltshire, CRS("+init=epsg:27700"))
+#Checking the coordinates system
+crs(Wiltshire_Projected)
+#Getting the attribute table of the shapefile
+head(Wiltshire_Projected)
+#Getting the names of the columns of the attribute tabele of the shapefile
+names(Wiltshire_Projected)
+#Getting all attributes of a certain column
+Wiltshire_Projected$NAME_1
+```
+
+###  4.5 Addressing the problem of having duplicated coordinates
+
+The problem of having duplicated coordinates is solved using the st_jitter function which accepts objects of the class sf or sfc. As a result the combined crime incidents data frame is created as an sf object using the function st_as_sf. The crime incidents are also projected to EPSG:27700 and the function st_jitter is applied.
+The jittered sf objects is transformed to a SpatialPointsDataFrame so the function zerdist can be applied in order to check for the presence of duplicated coordinates.
+There is another approach for addressing the problem of having duplicate coordinates. This approach keeps only one incident from all incidents that share the same coordinates and deletes all the other incidents. a lot of incidents would be deleted and this affects the integrity of the analysis.
+
+```{r}
+#Reading the shapefile using st_read
+Wiltshire1 = st_read(dsn ="ShapeFiles/Wiltshire.shp")
+#Projecting the shapefile
+Wiltshire1_Projected = st_transform(Wiltshire1, "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs")
+
+#Creating an sf spatial object from a data frame
+incidentsDrugsBurgerly_Spatial_Object = st_as_sf(incidentsDrugsBurgerly, coords = c("Longitude", "Latitude"), crs = 4326)
+#Checking for a coordinate system
+st_crs(incidentsDrugsBurgerly_Spatial_Object)
+#Assigning a coordinate system -- EPSG:27700
+incidentsDrugsBurgerly_Spatial_Object_Projected = st_set_crs(incidentsDrugsBurgerly_Spatial_Object, "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs") 
+#Transforming coordinate systems
+incidentsDrugsBurgerly_Spatial_Object_Projected = st_transform(incidentsDrugsBurgerly_Spatial_Object, "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs")
+Wiltshire1_Projected = st_transform(Wiltshire1, "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs")
+
+#Addressing the problem of having duplicated coordinates
+#Applying the jitter function which accepts objects of class sf or sfc
+incidentsDrugsBurgerly_Spatial_Object_jittered = st_jitter(incidentsDrugsBurgerly_Spatial_Object, 0.2, factor = 0.002)
+#Applying the zerodist function after converting sf dataframe to
+#a spatialPointDataFrame using as_Spatial
+zero_Dist_Jittered = zerodist(as_Spatial(incidentsDrugsBurgerly_Spatial_Object_jittered))
+#Checking the length of duplicated coordinates
+length(unique(zero_Dist_Jittered[,1]))
+#Setting the projection to the converted spatialPointPattern
+zero_Dist_Jittered_projected = spTransform(as_Spatial(incidentsDrugsBurgerly_Spatial_Object_jittered), CRS("+init=epsg:27700"))
+#Getting the points that are only inside the shapefile
+zero_Dist_Jittered_projected_final = zero_Dist_Jittered_projected[Wiltshire_Projected,]
+
+par(mfrow=c(1,2))
+plot(zero_Dist_Jittered_projected, main = "Original data", pch=1, col="darkgreen", cex=0.5)
+plot(zero_Dist_Jittered_projected_final, main = "Clipped data", pch=1, col="blue", cex=0.5)
+```
+
+### 4.6 Creating point pattern objects
+In this section a point patter object is created from the incidents  that were previously jittered. The shapefile of Wiltshire is used as the window. Additionally, a point pattern object is created for each individual year.
+```{r}
+# Setting the observation window
+window <- as.owin(Wiltshire_Projected)
+
+#Getting all incidents into one ppp object
+all_incidents_ppp = ppp(x=zero_Dist_Jittered_projected_final@coords[,1],y=zero_Dist_Jittered_projected_final@coords[,2],window=window)
+
+#Getting the levels of the column Month in the zero_Dist_Jittered_projected_final dataframe
+levels = levels(zero_Dist_Jittered_projected_final$Month)
+
+
+```
+
+### 4.7 Filtering the spatial point data frame
+
+Since implementing the CRS on all the crime incidents for all the years is not computationally possible, a subset of the crim incidents will be used.
+
+```{r}
+
+#Subsetting the point pattern object to get the incidents for each year
+incidents_2016_jittered = zero_Dist_Jittered_projected_final[zero_Dist_Jittered_projected_final$Year =='2016' ,]
+incidents_2017_jittered = zero_Dist_Jittered_projected_final[zero_Dist_Jittered_projected_final$Year =='2017' ,]
+incidents_2018_jittered = zero_Dist_Jittered_projected_final[zero_Dist_Jittered_projected_final$Year =='2018' ,]
+
+#creating a point pattern object for each individual year
+incidents_2016_ppp = ppp(x=incidents_2016_jittered@coords[,1],y=incidents_2016_jittered@coords[,2],window=window)
+incidents_2017_ppp = ppp(x=incidents_2017_jittered@coords[,1],y=incidents_2017_jittered@coords[,2],window=window)
+incidents_2018_ppp = ppp(x=incidents_2018_jittered@coords[,1],y=incidents_2018_jittered@coords[,2],window=window)
+
+```
+
+### 5. Testing CSR
+#### 5.1 Assumptions
+
+1. For simplicity reasons, all crime incidents will be treated as having the same probability of occuring
+2. The location of crime incidents has no influence on other incidents.
+
+There are many approaches for testing CSR. In this part of the analysis, different methods are used to test CSR. 3 methods for testing CRS are explored. Additionally, the results and the problems of each method are discussed as well. Even though all method used in this section test for CSR, the underlying implementation differs significantly as each method carries out the analysis based on different parameters.
+To stay within the scope of the project, the differences between the fore mentioned methods are not deeply discussed.
+
+#### 5.2 Quadrat method
+In this method, the study area is divided into rectangles of equal areas. The CRS hypothesis says each rectangle's count distribution must be the same assuming the region is large enough.
+
+##### 5.2.1 The Pearson χ2 goodness-of-fit test
+After dividing the area into rectangles, the number of crime incidents in each rectangle is counted. This gives us the possible outcomes. The counts then are used to record the total number of cells with the possible outcomes. Then we use Poisson approximation with the mean expected number of points to calculate the theoretical outcomes that we would have.
+
+##### 5.2.2 Statistical test
+NULL HYPOTHESIS: there is no significant difference between the observed and the expected value. In other words the data pattern is a realisation of Complete Spatial Randomness. If the expected statistic is bigger than the observed one, the p-value would be bigger than the probability threshold. As a result, we can conclude that there is not sufficient evidence to say that the spatial distribution is not random.
+ALTERNATIVE HYPOTHESIS: There is sufficient evidence between the observed and the expected value. In the alternative hypothesis, the opposite of the null hypothesis is tested.
+
+##### 5.2.3 Quadrat method CSR test
+Quadrate.test function provides row ways for testing for CSR using Chi square or using Monte Carlo testing. In this section both method are explored. The Wiltshire region is divided into 100 subregions. Other numbers were explored and they all led to the same conclusion, however, considerng the area of Wiltshire, deviding the region into 100 subregions was more suited for the analysis.
+
+##### 5.2.3.1 Quadrat method 2016
+```{r}
+#quadrat test using Chi square
+quadrat.test(quadratcount(incidents_2016_ppp,nx = 100, ny = 100),alternative="clustered")
+#quadrat test using Montecarlo
+quadrat.test(quadratcount(incidents_2016_ppp,nx = 100, ny = 100),alternative="clustered", method="M")
+```
+
+The results using both methods are indicating that the null hypotheses is rejected which means that the spatial distribution of the crime incidents is not random. The results says for a 100*100 grid with the drug and burgherly incidents, we have a statistic of 8287.1 which gives a p-value of 0.0025 using the MonteCarlo testing. Since the p-value is less than the significance level which is 0.05, the null hypothesis is rejected.
+Testing for CSR using the quadrat method is not a robust testing since it depends on dividing the area into rectangles. Choosing the rectangle size highly effects the results.
+
+##### 5.2.3.1 Quadrat method 2017
+```{r}
+#quadrat test using Chi square
+quadrat.test(quadratcount(incidents_2017_ppp,nx = 100, ny = 100),alternative="clustered")
+#quadrat test using Montecarlo
+quadrat.test(quadratcount(incidents_2017_ppp,nx = 100, ny = 100),alternative="clustered", method="M")
+```
+##### 5.2.3.1 Quadrat method 2018
+```{r}
+#quadrat test using Chi square
+quadrat.test(quadratcount(incidents_2018_ppp,nx = 100, ny = 100),alternative="clustered")
+#quadrat test using Montecarlo
+quadrat.test(quadratcount(incidents_2018_ppp,nx = 100, ny = 100),alternative="clustered", method="M")
+```
+
+### 5.3 Nearest Neighbour Method
+To carry out the NN-method to test for CSR, we need to determine the probability distribution of the nearest neighbour distance under CSR. The observed values of the NN-distance are compared against the values of the distribution.
+The NN method depends on the point density of the incidents. The point incidents are assumed to be normally distributed under the CSR Hypothesis.
+The function that is used to test the interpoint distances is the G function.
+
+#### 5.3.1 Nearest Neighbour Method 2016 
+```{r}
+#Plotting the G function for the incodents of 2016
+plot(Gest(incidents_2016_ppp) , main = "G function 2016")
+```
+
+
+#### 5.3.1 Nearest Neighbour Method 2017
+```{r}
+#Plotting the G function for the incodents of 2017
+plot(Gest(incidents_2017_ppp) , main = "G function 2017")
+```
+
+#### 5.3.1 Nearest Neighbour Method 2018
+```{r}
+#Plotting the G function for the incodents of 2018
+plot(Gest(incidents_2018_ppp) , main = "G function 2018")
+```
+
+The graphs of the three years show very similar results. The blue line in each figure above shows what is expected under CSR. The other lines show what is observed from the drug and burgherly incidents for each year. The plot indicates that the incidents are clustered as each incident has more neighbours at each distance than expected under the CSR.
+
+### 5.4 K function under CSR
+
+The K function, known as Ripley’s K function, is used to how point patterns occur over area of interest. K function helps determining if the area of interest is randomly distributed or clustered. The K function counts the number of neighbouring incidents that are found within a given distance of each incident. the number of observed incidents is compared to the number of the expected incidents based on CSR.
+K function is calculated based on multiple distances which allows us to check how point pattern changes with scale. This helps us indicate if the points are clustered at close distances while being dispersed at father distances.
+
+#### 5.4.1 K function 2016
+```{r}
+#Creating a k object
+k_2016 = Kest(incidents_2016_ppp,correction="border")
+plot(k_2016, main = "K function 2016")
+k_2016_env = envelope(incidents_2016_ppp, Kest,nsim = 99, correction = "border")
+plot(k_2016_env, main = "K function 2016 with an envelop")
+```
+
+
+#### 5.4.1 K function 2017
+```{r}
+#Creating a k object
+k_2017 = Kest(incidents_2017_ppp,correction="border")
+plot(k_2017, main = "K function 2017")
+k_2017_env = envelope(incidents_2017_ppp, Kest,nsim = 99, correction = "border")
+plot(k_2017_env , main = "K function 2017 with an envelop")
+```
+
+#### 5.4.1 K function 2018
+```{r}
+#Creating a k object
+k_2018 = Kest(incidents_2018_ppp,correction="border")
+plot(k_2018 , main = "K function 2018")
+k_2018_env = envelope(incidents_2018_ppp, Kest,nsim = 99, correction = "border")
+plot(k_2018_env , main = "K function 2018 with an envelop")
+```
+
+The red line in the graph shows the theoretical incidents of the drug and burgherly incidents obtained under CSR. The upper and lower boundaries of the envelops which are calculated by randomly creating sample points are represented by the grey area. The solid black line represents the observed k function for the incidents of each year. One can indicate from the graph that there is a statistically significant clustering at smaller distances. How small the distance is varies between each year. For the year 2016 and 2018 that distance is around 1100 while that distance is around 1000 for the year 2017. There is also a statistically significant dispersion at larger distances for the year 2017 as the k value falls under the envelop boundarie. However, this is not the case for the year 2016 and 2018.
+
+## 6. Conclusion
+Within the three studied years there is a pattern in terms of the temporal distribution of the incidents. The number of incidents in each year fluctuates across the year in a similar pattern which reaches a minimum in February and a maximum in July . The number of each crime type in each year is also similar across the studied years with the Anti-social behaviour being the higest crime in numbers. The quadrat, nearst neighbour and the function methods all indicate that the crime incidents do not fall under complete spatial randomness and thus there are clusters.
+
+## Further work
+After confirming the presense of spatial clusters, the dataset can be further analysed with testing with covariates. For example the effect of proximity to bars or night clubs on the way crime incidents are spatially distributed.
+What I am personally very interested in is testing the effect forigners have on crime rate and distribution. It is not a surprise that the raise of the right winged parties is very effected by what media is trying to promote. What the media tries to promote is having a strong link between crime rate and the presence of forigners in the western world.
+
+
+## References
+
+Ripley’s K function
+
+http://resources.esri.com/help/9.3/arcgisdesktop/com/gp_toolref/spatial_statistics_tools/how_multi_distance_spatial_cluster_analysis_colon_ripley_s_k_function_spatial_statistics_works.htm
+
+
+
+Point pattern analysis
+
+http://rstudio-pubs-static.s3.amazonaws.com/481933_61ed3eff92e74c04a52d44a48b1b4548.html
+
+https://joparga3.github.io/spatial_point_pattern/
+
+https://rspatial.org/analysis/8-pointpat.html
+
+https://mgimond.github.io/Spatial/point-pattern-analysis-in-r.html
+
+https://mgimond.github.io/Spatial/point-pattern-analysis.html
+
+https://biologyforfun.wordpress.com/2017/08/06/introduction-to-point-pattern-analysis-for-ecologists/
+
+https://rpubs.com/adam_dennett/126356
+
+https://rpubs.com/hughes/295880
+
+Point Pattern analysis and spatial interpolation with R:
+
+https://github.com/Robinlovelace/Creating-maps-in-R/blob/master/vignettes/point-pattern.md#references
+
+Point pattern analysis tutorial:
+
+https://rspatial.org/analysis/analysis.pdf
+
+Point pattern analysis Penn state university:
+
+https://www.e-education.psu.edu/geog586/l5_p2.html
+
+point pattern analysis university Marburg:
+
+https://moc.online.uni-marburg.de/doku.php?id=courses:bsc:project-seminar-lidar:lecture-notes:pl-ln-70
+
+
+
