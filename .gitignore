@@ -23,3 +23,8 @@
 
 # R Environment Variables
 .Renviron
+
+# To ignore the html files
+*.html
+
+/ShapeFiles/*
