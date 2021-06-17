@@ -1,6 +1,11 @@
 # Ignoring the data files which are too big
 /Data/*
 
+# Ignroing the shapefiles
+/ShapeFiles/*
+
+# Ignroing The temporary files
+/Analysis-Of-Spatio-Temporal-Data-Fadi-Moubayed_files/*
 
 # History files
 .Rhistory
@@ -27,4 +32,4 @@
 # To ignore the html files
 *.html
 
-/ShapeFiles/*
+
